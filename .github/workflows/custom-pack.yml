@@ -130,12 +130,33 @@ jobs:
               with:
                   targets: ${{ matrix.target }}
 
-            - name: 修改 Tauri 配置和代码
+            - name: 生成临时签名密钥对
               shell: bash
               run: |
-                  # 备份原配置和代码
+                  # 生成临时的 Tauri 签名密钥对（仅用于通过构建验证）
+                  echo "生成临时签名密钥对..."
+
+                  # 使用 pnpm tauri 命令生成密钥
+                  pnpm tauri signer generate -w /tmp/tauri_sign.key || {
+                      echo "使用 pnpm 生成失败，尝试使用 cargo..."
+                      cargo install tauri-cli --version "^2.0.0" --locked
+                      pnpm tauri signer generate -w /tmp/tauri_sign.key
+                  }
+
+                  # 读取生成的公钥和私钥
+                  TAURI_PUBLIC_KEY=$(cat /tmp/tauri_sign.key.pub)
+                  TAURI_PRIVATE_KEY=$(cat /tmp/tauri_sign.key)
+
+                  echo "TAURI_PUBLIC_KEY=$TAURI_PUBLIC_KEY" >> $GITHUB_ENV
+                  echo "TAURI_PRIVATE_KEY=$TAURI_PRIVATE_KEY" >> $GITHUB_ENV
+
+                  echo "✅ 临时签名密钥已生成"
+
+            - name: 修改 Tauri 配置
+              shell: bash
+              run: |
+                  # 备份原配置
                   cp src-tauri/tauri.conf.json src-tauri/tauri.conf.json.backup
-                  cp src-tauri/src/lib.rs src-tauri/src/lib.rs.backup
 
                   # 使用 Node.js 修改配置
                   node -e "
@@ -146,9 +167,9 @@ jobs:
                   config.productName = '${{ github.event.inputs.app_name }}';
                   config.identifier = '${{ github.event.inputs.app_identifier }}';
 
-                  // 完全禁用更新器插件（避免签名错误）
+                  // 使用临时公钥替换原有公钥
                   if (config.plugins && config.plugins.updater) {
-                      delete config.plugins.updater;
+                      config.plugins.updater.pubkey = process.env.TAURI_PUBLIC_KEY || config.plugins.updater.pubkey;
                   }
 
                   // 修改版本号
@@ -160,10 +181,7 @@ jobs:
                   fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(config, null, 4));
                   "
 
-                  # 注释掉 lib.rs 中的更新器插件注册
-                  sed -i.bak 's/\.plugin(tauri_plugin_updater::Builder::new()\.build())/\/\/ .plugin(tauri_plugin_updater::Builder::new().build()) \/\/ 已禁用更新器/' src-tauri/src/lib.rs
-
-                  echo "✅ Tauri 配置和代码已更新"
+                  echo "✅ Tauri 配置已更新"
 
             - name: 创建启动页面配置
               shell: bash
@@ -221,6 +239,9 @@ jobs:
                   sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
             - name: 构建 Tauri 应用
+              env:
+                  TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_PRIVATE_KEY }}
+                  TAURI_SIGNING_PUBLIC_KEY: ${{ env.TAURI_PUBLIC_KEY }}
               run: |
                   if [ "${{ github.event.inputs.debug_mode }}" == "true" ]; then
                     pnpm tauri build --debug ${{ matrix.args }}
@@ -238,16 +259,17 @@ jobs:
                       src-tauri/target/*/debug/bundle/**/*
                   retention-days: 7
 
-            - name: 恢复原配置
+            - name: 清理临时文件
               if: always()
               shell: bash
               run: |
+                  # 恢复原配置
                   if [ -f src-tauri/tauri.conf.json.backup ]; then
                     mv src-tauri/tauri.conf.json.backup src-tauri/tauri.conf.json
                   fi
-                  if [ -f src-tauri/src/lib.rs.backup ]; then
-                    mv src-tauri/src/lib.rs.backup src-tauri/src/lib.rs
-                  fi
+
+                  # 删除临时密钥文件
+                  rm -f /tmp/tauri_sign.key /tmp/tauri_sign.key.pub
 
     # 创建 Release
     create-release:
