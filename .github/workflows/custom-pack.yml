@@ -283,6 +283,37 @@ jobs:
               with:
                   path: artifacts
 
+            - name: 整理安装包
+              shell: bash
+              run: |
+                  # 创建发布目录
+                  mkdir -p release-files
+
+                  # 只复制用户需要的安装包文件
+                  echo "📦 整理安装包文件..."
+
+                  # macOS - .dmg 和 .app.tar.gz (更新包)
+                  find artifacts -name "*.dmg" -exec cp {} release-files/ \;
+                  find artifacts -name "*.app.tar.gz" -exec cp {} release-files/ \;
+                  find artifacts -name "*.app.tar.gz.sig" -exec cp {} release-files/ \;
+
+                  # Windows - .exe 和 .msi
+                  find artifacts -name "*.exe" -exec cp {} release-files/ \;
+                  find artifacts -name "*.msi" -exec cp {} release-files/ \;
+                  find artifacts -name "*.msi.zip" -exec cp {} release-files/ \;
+                  find artifacts -name "*.msi.zip.sig" -exec cp {} release-files/ \;
+
+                  # Linux - .deb, .rpm, .AppImage
+                  find artifacts -name "*.deb" -exec cp {} release-files/ \;
+                  find artifacts -name "*.rpm" -exec cp {} release-files/ \;
+                  find artifacts -name "*.AppImage" -exec cp {} release-files/ \;
+                  find artifacts -name "*.AppImage.tar.gz" -exec cp {} release-files/ \;
+                  find artifacts -name "*.AppImage.tar.gz.sig" -exec cp {} release-files/ \;
+
+                  # 显示将要上传的文件
+                  echo "✅ 准备上传以下文件:"
+                  ls -lh release-files/
+
             - name: 创建 Release
               uses: softprops/action-gh-release@v1
               with:
@@ -301,11 +332,35 @@ jobs:
 
                       ${{ github.event.inputs.platforms }}
 
+                      ## 安装说明
+
+                      ### macOS
+                      下载 `.dmg` 文件，双击安装。首次运行如提示"已损坏"，执行：
+                      ```bash
+                      sudo xattr -r -d com.apple.quarantine /Applications/${{ github.event.inputs.app_name }}.app
+                      ```
+
+                      ### Windows
+                      下载 `.exe` 或 `.msi` 文件，双击安装。
+
+                      ### Linux
+                      ```bash
+                      # Ubuntu/Debian
+                      sudo dpkg -i ${{ github.event.inputs.app_name }}_*.deb
+
+                      # Fedora/RHEL
+                      sudo rpm -i ${{ github.event.inputs.app_name }}-*.rpm
+
+                      # AppImage (通用)
+                      chmod +x ${{ github.event.inputs.app_name }}_*.AppImage
+                      ./${{ github.event.inputs.app_name }}_*.AppImage
+                      ```
+
                       ---
 
                       🤖 通过 GitHub Actions 自动构建
                   draft: false
                   prerelease: false
-                  files: artifacts/**/*
+                  files: release-files/*
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
