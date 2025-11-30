@@ -145,6 +145,12 @@ jobs:
                   config.productName = '${{ github.event.inputs.app_name }}';
                   config.identifier = '${{ github.event.inputs.app_identifier }}';
 
+                  // 移除更新器签名配置（避免签名错误）
+                  if (config.plugins && config.plugins.updater) {
+                      delete config.plugins.updater.pubkey;
+                      delete config.plugins.updater.endpoints;
+                  }
+
                   // 修改版本号
                   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
                   pkg.version = '${{ github.event.inputs.app_version }}';
