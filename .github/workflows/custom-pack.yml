@@ -1,0 +1,277 @@
+name: Custom Pack
+
+on:
+    workflow_dispatch:
+        inputs:
+            app_name:
+                description: '应用名称 (例如: YouTube, Twitter)'
+                required: true
+                type: string
+            app_url:
+                description: '要打包的网页 URL (例如: https://www.youtube.com)'
+                required: true
+                type: string
+            app_version:
+                description: '应用版本号 (例如: 0.0.1)'
+                required: true
+                type: string
+                default: '0.0.1'
+            app_identifier:
+                description: '应用标识符 (例如: com.example.youtube)'
+                required: true
+                type: string
+            window_width:
+                description: '窗口宽度 (像素)'
+                required: false
+                type: string
+                default: '1200'
+            window_height:
+                description: '窗口高度 (像素)'
+                required: false
+                type: string
+                default: '800'
+            debug_mode:
+                description: '启用调试模式'
+                required: false
+                type: boolean
+                default: false
+            platforms:
+                description: '选择打包平台 (可多选: macos-arm, macos-intel, windows-x64, windows-arm, linux-x64, linux-arm)'
+                required: false
+                type: string
+                default: 'macos-arm,windows-x64,linux-x64'
+            inject_js:
+                description: '自定义 JS 代码 (可选，用于注入到页面)'
+                required: false
+                type: string
+                default: ''
+
+jobs:
+    # 解析用户选择的平台
+    prepare:
+        runs-on: ubuntu-latest
+        outputs:
+            matrix: ${{ steps.set-matrix.outputs.matrix }}
+        steps:
+            - name: 设置构建矩阵
+              id: set-matrix
+              run: |
+                  platforms="${{ github.event.inputs.platforms }}"
+
+                  # 初始化矩阵数组
+                  matrix='{"include":['
+
+                  # 根据用户选择添加平台
+                  if [[ "$platforms" == *"macos-arm"* ]]; then
+                    matrix+='{"platform":"macos-latest","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin","name":"macOS-ARM"},'
+                  fi
+
+                  if [[ "$platforms" == *"macos-intel"* ]]; then
+                    matrix+='{"platform":"macos-latest","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin","name":"macOS-Intel"},'
+                  fi
+
+                  if [[ "$platforms" == *"windows-x64"* ]]; then
+                    matrix+='{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","args":"","name":"Windows-x64"},'
+                  fi
+
+                  if [[ "$platforms" == *"windows-arm"* ]]; then
+                    matrix+='{"platform":"windows-latest","target":"aarch64-pc-windows-msvc","args":"--target aarch64-pc-windows-msvc","name":"Windows-ARM"},'
+                  fi
+
+                  if [[ "$platforms" == *"linux-x64"* ]]; then
+                    matrix+='{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"","name":"Linux-x64"},'
+                  fi
+
+                  if [[ "$platforms" == *"linux-arm"* ]]; then
+                    matrix+='{"platform":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu","args":"--target aarch64-unknown-linux-gnu","name":"Linux-ARM"},'
+                  fi
+
+                  # 移除最后的逗号并闭合 JSON
+                  matrix="${matrix%,}]}"
+
+                  echo "matrix=$matrix" >> $GITHUB_OUTPUT
+                  echo "构建矩阵: $matrix"
+
+    # 执行打包
+    build:
+        needs: prepare
+        permissions:
+            contents: write
+        strategy:
+            fail-fast: false
+            matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+        runs-on: ${{ matrix.platform }}
+        timeout-minutes: 60
+
+        steps:
+            - name: 检出代码
+              uses: actions/checkout@v4
+
+            - name: 安装 Rust 目标平台
+              run: rustup target add ${{ matrix.target }}
+
+            - name: 设置 pnpm
+              uses: pnpm/action-setup@v3
+              with:
+                  version: latest
+
+            - name: 设置 Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: pnpm
+
+            - name: 安装前端依赖
+              run: pnpm install
+
+            - name: 安装 Rust 工具链
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: ${{ matrix.target }}
+
+            - name: 修改 Tauri 配置
+              shell: bash
+              run: |
+                  # 备份原配置
+                  cp src-tauri/tauri.conf.json src-tauri/tauri.conf.json.backup
+
+                  # 使用 Node.js 修改配置
+                  node -e "
+                  const fs = require('fs');
+                  const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+
+                  // 修改应用名称和标识符
+                  config.productName = '${{ github.event.inputs.app_name }}';
+                  config.identifier = '${{ github.event.inputs.app_identifier }}';
+
+                  // 修改版本号
+                  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+                  pkg.version = '${{ github.event.inputs.app_version }}';
+                  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 4));
+
+                  // 保存配置
+                  fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(config, null, 4));
+                  "
+
+                  echo "✅ Tauri 配置已更新"
+
+            - name: 创建启动页面配置
+              shell: bash
+              run: |
+                  # 创建临时 HTML 文件用于加载目标网页
+                  cat > dist/index.html << 'EOF'
+                  <!DOCTYPE html>
+                  <html>
+                  <head>
+                      <meta charset="UTF-8">
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                      <title>${{ github.event.inputs.app_name }}</title>
+                      <style>
+                          body, html { margin: 0; padding: 0; overflow: hidden; }
+                          #app { width: 100vw; height: 100vh; }
+                      </style>
+                  </head>
+                  <body>
+                      <div id="app">加载中...</div>
+                      <script>
+                          // 自定义注入的 JS
+                          const customJS = `${{ github.event.inputs.inject_js }}`;
+
+                          // 重定向到目标 URL
+                          window.location.href = '${{ github.event.inputs.app_url }}';
+
+                          // 如果有自定义 JS，在页面加载后执行
+                          if (customJS) {
+                              window.addEventListener('load', () => {
+                                  try {
+                                      eval(customJS);
+                                  } catch (e) {
+                                      console.error('自定义 JS 执行失败:', e);
+                                  }
+                              });
+                          }
+                      </script>
+                  </body>
+                  </html>
+                  EOF
+
+                  echo "✅ 启动页面已创建"
+
+            - name: 生成应用图标
+              run: pnpm tauri icon
+
+            - name: 创建 macOS 图标 (仅 macOS)
+              if: matrix.platform == 'macos-latest'
+              run: node ./scripts/creatIcon.cjs
+
+            - name: 安装 Linux 依赖 (仅 Linux)
+              if: matrix.platform == 'ubuntu-22.04'
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+            - name: 构建 Tauri 应用
+              run: |
+                  if [ "${{ github.event.inputs.debug_mode }}" == "true" ]; then
+                    pnpm tauri build --debug ${{ matrix.args }}
+                  else
+                    pnpm tauri build ${{ matrix.args }}
+                  fi
+              shell: bash
+
+            - name: 上传构建产物
+              uses: actions/upload-artifact@v4
+              with:
+                  name: ${{ github.event.inputs.app_name }}-${{ matrix.name }}
+                  path: |
+                      src-tauri/target/*/release/bundle/**/*
+                      src-tauri/target/*/debug/bundle/**/*
+                  retention-days: 7
+
+            - name: 恢复原配置
+              if: always()
+              shell: bash
+              run: |
+                  if [ -f src-tauri/tauri.conf.json.backup ]; then
+                    mv src-tauri/tauri.conf.json.backup src-tauri/tauri.conf.json
+                  fi
+
+    # 创建 Release
+    create-release:
+        needs: build
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: 下载所有构建产物
+              uses: actions/download-artifact@v4
+              with:
+                  path: artifacts
+
+            - name: 创建 Release
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: ${{ github.event.inputs.app_name }}-v${{ github.event.inputs.app_version }}
+                  name: ${{ github.event.inputs.app_name }} v${{ github.event.inputs.app_version }}
+                  body: |
+                      ## 应用信息
+
+                      - **应用名称**: ${{ github.event.inputs.app_name }}
+                      - **版本**: ${{ github.event.inputs.app_version }}
+                      - **目标 URL**: ${{ github.event.inputs.app_url }}
+                      - **窗口尺寸**: ${{ github.event.inputs.window_width }}x${{ github.event.inputs.window_height }}
+                      - **调试模式**: ${{ github.event.inputs.debug_mode }}
+
+                      ## 打包平台
+
+                      ${{ github.event.inputs.platforms }}
+
+                      ---
+
+                      🤖 通过 GitHub Actions 自动构建
+                  draft: false
+                  prerelease: false
+                  files: artifacts/**/*
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
