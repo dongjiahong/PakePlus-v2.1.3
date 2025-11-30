@@ -227,13 +227,26 @@ A: 常见原因:
 - 选择的平台字符串有误（检查逗号分隔）
 - 网络问题导致依赖下载失败（重新运行即可）
 
-### Q: TAURI_SIGNING_PRIVATE_KEY 错误是什么？
+### Q: TAURI_SIGNING_PRIVATE_KEY 或 pubkey 错误是什么？
 
-A: 这是 Tauri 应用签名私钥缺失的错误。工作流已自动处理此问题：
+A: 这是 Tauri 应用更新器签名相关的错误。工作流已自动处理此问题：
+
+**Token 说明**:
 - **GITHUB_TOKEN**: GitHub 自动提供，用于仓库操作（无需配置）✅
-- **TAURI_SIGNING_PRIVATE_KEY**: 应用签名私钥（工作流已自动移除签名配置）✅
+- **TAURI_SIGNING_PRIVATE_KEY**: 应用签名私钥（工作流已禁用）✅
+
+**自动修复内容**:
+1. 从 `tauri.conf.json` 中删除 `updater` 配置
+2. 在 `lib.rs` 中注释掉更新器插件注册
+3. 构建完成后自动恢复原始文件
 
 如果仍然遇到此错误，请确保使用最新版本的 `custom-pack.yml` 工作流文件。
+
+**本地测试**:
+```bash
+# 运行测试脚本验证修改逻辑
+./scripts/test-disable-updater.sh
+```
 
 ### Q: 如何修改应用图标？
 

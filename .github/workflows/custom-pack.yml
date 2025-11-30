@@ -130,11 +130,12 @@ jobs:
               with:
                   targets: ${{ matrix.target }}
 
-            - name: 修改 Tauri 配置
+            - name: 修改 Tauri 配置和代码
               shell: bash
               run: |
-                  # 备份原配置
+                  # 备份原配置和代码
                   cp src-tauri/tauri.conf.json src-tauri/tauri.conf.json.backup
+                  cp src-tauri/src/lib.rs src-tauri/src/lib.rs.backup
 
                   # 使用 Node.js 修改配置
                   node -e "
@@ -145,10 +146,9 @@ jobs:
                   config.productName = '${{ github.event.inputs.app_name }}';
                   config.identifier = '${{ github.event.inputs.app_identifier }}';
 
-                  // 移除更新器签名配置（避免签名错误）
+                  // 完全禁用更新器插件（避免签名错误）
                   if (config.plugins && config.plugins.updater) {
-                      delete config.plugins.updater.pubkey;
-                      delete config.plugins.updater.endpoints;
+                      delete config.plugins.updater;
                   }
 
                   // 修改版本号
@@ -160,7 +160,10 @@ jobs:
                   fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(config, null, 4));
                   "
 
-                  echo "✅ Tauri 配置已更新"
+                  # 注释掉 lib.rs 中的更新器插件注册
+                  sed -i.bak 's/\.plugin(tauri_plugin_updater::Builder::new()\.build())/\/\/ .plugin(tauri_plugin_updater::Builder::new().build()) \/\/ 已禁用更新器/' src-tauri/src/lib.rs
+
+                  echo "✅ Tauri 配置和代码已更新"
 
             - name: 创建启动页面配置
               shell: bash
@@ -241,6 +244,9 @@ jobs:
               run: |
                   if [ -f src-tauri/tauri.conf.json.backup ]; then
                     mv src-tauri/tauri.conf.json.backup src-tauri/tauri.conf.json
+                  fi
+                  if [ -f src-tauri/src/lib.rs.backup ]; then
+                    mv src-tauri/src/lib.rs.backup src-tauri/src/lib.rs
                   fi
 
     # 创建 Release
